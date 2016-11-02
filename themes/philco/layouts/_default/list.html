@@ -1,0 +1,11 @@
+{{ partial "header.html" . }}
+<div>
+    <h2>Blog</h2>
+    <ul>
+        {{ range .Data.Pages.ByPublishDate }}
+        {{ partial "post.html" . }}
+        {{ end }}
+    </ul>
+</div>
+{{ partial "footer.html" . }}
+

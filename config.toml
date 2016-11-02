@@ -1,0 +1,25 @@
+baseurl = "http://replace-this-with-your-hugo-site.com/"
+title = "Phil Scott"
+languageCode = "en-us"
+theme = "philco"
+
+
+[permalinks]
+fixed = ":title/"
+blog = "post/:slug/"
+
+[params]
+Author = "Phil Scott"
+CacheBuster = true
+DateForm = "Mon Jan 2, 2006"
+DateFormFull = "Mon Jan 2 2006 15:04:05 MST"
+Description = "Quite exciting this computer magic"
+Email = "phil.scott@gmail.com"
+FaviconFile = "img/leaf.ico"
+GATracker = "UA-86719954-1"
+GitHub = "//github.com/enkafan"
+HighlightJS = true
+Initials = "ps" # Displayed on single post page; DEPRECATED in v0.3.0.
+Lang = "en"
+#LinkedIn = "//linkedin.com/in/you"
+Twitter = "//twitter.com/philco78"

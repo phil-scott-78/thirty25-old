@@ -1,0 +1,9 @@
+{{ partial "header.html" . }}
+{{ range .Data.Pages.ByPublishDate }}
+    {{ if eq .Section "blog" }}
+    {{ partial "post.html" . }}
+    <hr>
+    {{ end }}
+{{ end }}
+{{ partial "footer.html" . }}
+

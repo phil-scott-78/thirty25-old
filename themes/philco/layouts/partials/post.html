@@ -1,0 +1,7 @@
+<div class="blog-heading">
+    <h2><a href="{{ .Permalink }}">{{ .Title }}</a></h2> 
+    <div class="meta">
+        <div class="date" title="{{ .Date.Format .Site.Params.DateFormFull }}">{{ .Date.Format .Site.Params.DateForm }}</div>
+    </div>
+</div>
+{{ .Content }}

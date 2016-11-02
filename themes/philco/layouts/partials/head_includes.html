@@ -1,0 +1,63 @@
+<!-- HTTPS -->
+
+<script type="text/javascript">
+    var baseURL = '{{ .Site.BaseURL }}';
+    var host = baseURL.substring(0, baseURL.length - 1).replace(/\//g, '');
+    if ((host === window.location.host) && (window.location.protocol !== 'https:')) {
+        window.location.protocol = 'https:';
+    }
+</script>
+
+<!-- Fonts -->
+<script src="https://use.fontawesome.com/ea8e909c76.js"></script>
+<link href="https://fonts.googleapis.com/css?family=Lato:400,700,900" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css?family=Raleway:900" rel="stylesheet">
+<!-- CSS -->
+
+{{ if .Site.Params.HighlightJS }}
+  <link rel="stylesheet" href="//cdnjs.cloudflare.com/ajax/libs/highlight.js/9.7.0/styles/github.min.css">
+{{ end }}
+
+<link rel="stylesheet" href="http://yui.yahooapis.com/pure/0.6.0/pure-min.css">
+<!--[if lte IE 8]> 
+    <link rel="stylesheet" href="http://yui.yahooapis.com/pure/0.6.0/grids-responsive-old-ie-min.css">
+<![endif]-->
+<!--[if gt IE 8]><!-->
+    <link rel="stylesheet" href="http://yui.yahooapis.com/pure/0.6.0/grids-responsive-min.css">  
+<!--<![endif]-->
+
+{{ if eq true .Site.Params.CacheBuster }}
+
+<link rel="stylesheet" href="/css/main.css">
+
+{{range .Site.Params.ExtraCssFiles}}
+    <link rel="stylesheet" href="{{.}}">
+{{end}}
+
+{{ else }}
+
+<link rel="stylesheet" href="/css/main.css?{{ .Now.Unix }}">
+
+{{range .Site.Params.ExtraCssFiles}}
+    <link rel="stylesheet" href="{{.}}?{{ .Now.Unix }}">
+{{end}}
+
+{{ end }}
+
+<!-- Icon -->
+<link rel="shortcut icon"
+{{ if .Site.Params.FaviconFile }}
+    href="/{{ .Site.Params.FaviconFile }}"
+{{ else }}
+    href="/img/favicon.ico"
+{{ end }}
+>
+
+<!-- RSS -->
+{{ if .RSSlink }}
+  <link href="{{ .RSSlink }}" rel="alternate" type="application/rss+xml" title="{{ .Site.Title }}" />
+{{ end }}
+
+<!--[if lt IE 9]>
+    <script src="//html5shiv.googlecode.com/svn/trunk/html5.js"></script>
+<![endif]-->
