@@ -5,7 +5,7 @@ draft = false
 
 +++
 
-After hearing so many good things about VS 15 I wanted to give it a test run on some of our production code. Visual Studio was great, but ran into some interesting issues while executing some of our unit tests. Everything was compiling fine, but on a handful of tests I'd get the following runtime error
+With VS 15 approaching a RC I felt it was time to give it a test run on some of our production code. Visual Studio itself worked great, butI  ran into some interesting issues while executing some of our unit tests. Everything was compiling fine, but on a handful of tests I'd get the following runtime error
 
 ``` output
 Unhandled Exception: System.ArgumentException: Expression of type 'System.Int32' cannot be used for return type 'System.Nullable`1[System.Int32]'
@@ -16,9 +16,9 @@ Unhandled Exception: System.ArgumentException: Expression of type 'System.Int32'
    at ....
 ```
 
-At first I didn't know what to make of it. Frustratingly enough the majority of the code that this was occuring in was relatively complicated join statements in EF or part of a complex validation rule that we set up with FluentValidation. I could easily resolve the issue by with an explicit cast or even moving the expression to an explicitly defined variable. But that would only fix the code I knew I had unit tests around and we are far from 100% code coverage. So I wanted to get to the heart of the issue.
+At first I didn't know what to make of it. Frustratingly enough the majority of the code that failing was either a relatively complicated join statements in EntityFramework, or part of a complex validation rule that we set up with FluentValidation. I could easily resolve the issue by with an explicit cast or even moving the expression to an explicitly defined variable. But that would only fix the code I knew I had unit tests around, and we are far from 100% code coverage. So I wanted to get to the heart of the issue.
 
-Step one was trying to figure out how to reproduce it, but without code using a third party library. Not going to lie - this was total guess and check. The FluentValidation code was tightly wound to the external library so it was right out, but the EF queries I felt was a good start. I could maybe just mimic the join that was failing using a couple of `List<>` and be good to go. I knew it had to do with casting a nullable int to a regular int, so the simplest example I could come up with that still showed the error was 
+Step one was trying to figure out how to reproduce it, but without code using a third party library. The FluentValidation code was tightly wound to the external library so it was right out, but the EF queries I felt were a good start. I could maybe just mimic the join that was failing using a couple of `List<>` and be good to go. I knew it had to do with casting a nullable int to a regular int, so I took one of the failing queries and simplified it to the point it still gave the error when running. Once I had that I replaced the `DbSet` with `List<>` and arrived with this: 
 
 ``` csharp
 class Program
@@ -44,9 +44,9 @@ public class Invoice
 }
 ```
 
-Threw this into a console application, hit run aaaand....it worked. No errror. I had already reproduced the issue using FluentValidation so I knew the error could be trigged from this console app. I took the dog for a walk and started thinking that maybe EF wasn't causing it but rather it being of type `IQueryable<>` caused the lambdas to be compiled differently. I headed back inside and threw an `AsQueryable()` onto the end of both definitions and hit run and....jackpot. Got the failure message and I was never happier to see some code fail.
+Threw this into a console application, hit run aaaand....it worked. No errror. I had already reproduced the issue using FluentValidation so I knew the error could be trigged from this console app. Stumped for now I took the dog for a walk and some fresh air. While walking I started thinking that the compiler shouldn't care about EF, but rather maybe the collections  being of type `IQueryable<>` was causing  the lambdas to be compiled differently. I headed back inside and threw an `AsQueryable()` onto the end of both definitions and hit run and....jackpot. Got the failure message, and I was never happier to see some code fail.
 
-Elated that I had a reproducable issue I naturally wanted to verify why it was happening. Luckily there's a great little tool at http://tryroslyn.azurewebsites.net/. I was able to copy and paste my little app here and check out the code that's generated using both the version in VS 15 (master) and the current nuget release and compare the difference. 
+Elated that I had a reproducable issue I naturally wanted to verify why it was happening. Luckily there's a great little tool at http://tryroslyn.azurewebsites.net/. This site lets you view the compiled output of a C# app in a variety of different Roslyn packages. So copied and paste my little app here, and checked out the code that was generated. I compared both the version in VS 15 (master) and the current nuget release.
 
 Armed with this I found the code at fault. In the current version the following code is produced:
 
@@ -57,7 +57,7 @@ Expression<Func<Invoice, int?>> arg_EE_2 = Expression.Lambda<Func<Invoice, int?>
 });
 ```
 
-In the version in VS 15 (master) this was produced:
+In the version in VS 15 (master) this code is produced:
 
 ``` csharp
 Expression<Func<Invoice, int?>> arg_DF_2 = Expression.Lambda<Func<Invoice, int?>>(Expression.Property(parameterExpression, methodof(Invoice.get_InvoiceId())), new ParameterExpression[]
@@ -66,20 +66,20 @@ Expression<Func<Invoice, int?>> arg_DF_2 = Expression.Lambda<Func<Invoice, int?>
 });
 ```
 
-Note the missing Expression.Convert. Feeling good about myself for finding a reproducable test case headed over to Roslyn's Github repository to [file my bug](https://github.com/dotnet/roslyn/issues/14722). 
+Note the missing `Expression.Convert`. Feeling good about myself for finding a reproducable test case I headed over to Roslyn's Github repository to [file my bug](https://github.com/dotnet/roslyn/issues/14722). 
 
-A few days passed and with my wife working night shifts I got the itch to see if I couldn't fix this myself. Heck, I got a C+ in compiler construction in college - I surely could do this.
+A few days passed, and with my wife working night shifts I got the itch to see if I couldn't fix this myself. Heck, I got a C+ in compiler construction in college - I surely could do this.
 
-Step one was getting Roslyn up and running locally. This was easy enough, just follow the instructions on the [Building Testing and Debugging
-](https://github.com/dotnet/roslyn/wiki/Building%20Testing%20and%20Debugging) page. I walked through the instructions here to get the code building, and just to verify I did it right I decided to go the next step and run the unit test suite. 10 minutes later...success. But oomph that was a brutal wait, and I feared my current strategy of a guess and check bug fix would be a long road to hoe.
+Step one was getting Roslyn up and running locally. This was easy enough, I just followed the instructions on the [Building Testing and Debugging
+](https://github.com/dotnet/roslyn/wiki/Building%20Testing%20and%20Debugging) page. I walked through the instructions here to get the code building, and just to verify I did it right I ran the unit test suite. 10 minutes later...success. But oomph that was a brutal wait. My current strategy of a guess and check bug fix would be a long road to hoe if I didn't come up with a better plan.
 
-Still, I now had the code running locally so it was time to try and track down precisely when things broke. Hopefully with that information I could see what changed and figure out how to get it back to a working state. A quick look at the difference between what's in VS 2015 Update 3 and VS15 unfortately provide slightly overwhelming.
+Still, I now had the code running locally. So now I could get to work. It was time to try and track down precisely when things broke. Hopefully with that information I could see what changed and figure out how to get it back to a working state. A quick look at the difference between what's in VS 2015 Update 3 and VS15 unfortately provide slightly overwhelming.
 
 ![3,700 commits](/img/blog/how-i-fixed-roslyn/commits.png)
 
-But I did have a powerful thing at my disposal. My reproducable test case was an actual program. I can automate this. Git has a nice tool called [`bisect`](https://git-scm.com/docs/git-bisect) just for this. TLDR of `git bisect` if you haven't used it - you give it a starting and ending spot of what you consider good and bad commits plus a command to run that returns an error code of 0 or 1 depending on if it passes. It then runs a binary search through the commits executing the command and moving on. I'd have to compile roslyn, but that's not a problem. Their build script is easy enough, and then I'd just have to compile the my test case, run it and check the error code. Thanks to the binary search of the bisect command instead of 3,700 commits I'd only need like 12 or 13 runs. Nice!
+But I did have a powerful thing at my disposal. My reproducable test case was an actual program. I can automate this. Git has a nice tool called [`bisect`](https://git-scm.com/docs/git-bisect) just for this. TLDR of `git bisect` if you haven't used it - you give it a starting and ending spot of what you consider good and bad commits plus a command to run that returns an error code of 0 or 1 depending on if it passes. It then runs a binary search through the commits executing the command and moving on. I'd compile roslyn on each pass, then use that version of the compiler to compile my test case application, run it and check the error code returned. Thanks to the binary search of the bisect command instead of 3,700 commits I'd only need like 12 or 13 runs. Nice!
 
-This did involve some trial and error. It seems the output of `csc.exe` changed as part of the changes. No problem, nothing a little batch file `if` statement couldn't resolve. `Git bisect` also wasn't a huge fan of the project.json files being modified in the build process so I also made sure to reset things before running my app so it could do its thing cleanly.  My script ultimately ended up looking like this:
+This did involve some trial and error. It seems the output location of `csc.exe` changed as part of the changes since Update3. No problem, nothing a little batch file `if` statement couldn't resolve. `Git bisect` also wasn't a huge fan of the project.json files being modified in the build process so I also made sure to reset things before running my app so bisect could do its thing cleanly.  My script ultimately ended up looking like this:
 
 ``` dos
 call Restore.cmd
@@ -122,17 +122,17 @@ Date:   Tue Jul 12 13:51:14 2016 -0700
 bisect run success
 ```
 
-Fantastic. Looks like I found the guilty commit. Unfortunately, well, this was a huge commit. 
+Fantastic. Looks like I found the guilty commit. Hopefully I could open this up and spot whatever changed relatively quickly. Unfortunately, well, this was a huge commit. 
 
 ![Lots of changes](/img/blog/how-i-fixed-roslyn/huge-commit.png)
 
-Sigh. One thing to do at this point - `CTRL-F` and search for lambda in the [commit on github](https://github.com/dotnet/roslyn/commit/6c9e18649f576bd9df1e0db8ad21bfbce0454704). Eye balling the highlighted results showed a couple of hot spots with `lambda` in the code frequently so I quickly scrolled there. After a few seconds of panic of this being a needle in a haystack I happened to glance down and see this 
+Sigh. Lots of code to read, but it looked like quite a bit of it was unit tests. Knowing I was dealing with a lambda issue there was one thing to do at this point - `CTRL-F` and search for lambda in the [commit on github](https://github.com/dotnet/roslyn/commit/6c9e18649f576bd9df1e0db8ad21bfbce0454704). Eye balling the highlighted results showed a couple of hot spots with `lambda` appearing frequently so I quickly scrolled there.
 
 ![Is that a debug.assert](/img/blog/how-i-fixed-roslyn/lambda-assert.png)
 
 That looks like somewhere to start! But I needed a better way to test than hitting the command line and compiling over and over again. I needed a unit test. I found a file named [CodeGenExprLambdaTests](https://github.com/dotnet/roslyn/blob/master/src/Compilers/CSharp/Test/Emit/CodeGen/CodeGenExprLambdaTests.cs) and figured this was as good as place as any to write my test. Opening this up I discovered a suite of tests that were verifying compiler output and executing the results. Perfect! All I had to do was mimic their style and hopefully I would be in business. Even better I noticed Resharper picked up the tests so just maybe I could use Resharper to only run the test I was working on. In retrospect I probably should have started here, but oh well.
 
-Thanks to a little copy and paste development it looked like this is the test I wanted to run. I could copy my full app here and they have a nice way to run the application and verify the output is correct.
+Thanks to a little copy and paste development from one of the existing tests I was able they have a nice way to run the application and verify the output is correct. Very cool.
 
 ``` csharp
 [Fact]
@@ -175,7 +175,7 @@ namespace ConsoleApplication2
 }
 ```
 
-I ran the unit test using R# with optimism, and instead of seeing an exception about casting I actually hit the `Debug.Assert`. Nice!
+I ran the unit test using R# with optimism, and instead of seeing an exception about casting I actually hit the `Debug.Assert` I suspected. Nice!
 
 ``` console
 ---------------------------
@@ -193,7 +193,7 @@ Abort   Retry   Ignore
 ---------------------------
 ```
 
-I had the [line and everything to start with](https://github.com/dotnet/roslyn/blob/aa52fe081859f640e461a767cbf195bbca64a58d/src/Compilers/CSharp/Portable/BoundTree/UnboundLambda.cs#L433). I quickly edited my unit test to a passing version without AsQueryable and ran it. Success! Good news all around. Not only does the unit test runner work, but I had a great starting spot for what is going wrong.
+That line of code matched exactly where I suspected from my quick code review. Just to confirm that my test would work in the happy path, I quickly edited my unit test to a passing version without `AsQueryable` and ran it. Success! Good news all around. Not only does the unit test runner work, but I had a great starting spot for what is going wrong.
 
 The line of code in question that was failing was this section of code.
 
@@ -213,7 +213,9 @@ if (_returnInferenceCache.TryGetValue(cacheKey, out returnInferenceLambda) && re
 
 ```
 
-Right there is the Debug.Assert failing when ReturnType doesn't equal whatever this lamdaSymbol.Return type is. Huh. So it looks like they are caching previously generated expressions if they match, but it appears we are somehow pulling one out that doesn't have a matching return type. Running the test through the debugger everything else seemed to jive, just not this. Looking at the end of the if statement that was already checking `InferredFromSingleType` it appeared to me that maybe more filtering was needed here. So I added one more check
+Right there is the `Debug.Assert` failing when ReturnType doesn't equal whatever this `lamdaSymbol.ReturnType` is. Huh. So it looks like they are caching previously generated expressions if they match, but it appears we are somehow pulling one out that doesn't have a matching return type. Running the test through the debugger everything else seemed to jive, just not this. This makes sense - in the release version the `Debug.Assert` wouldn't be there, but rather it would keep moving forward and return the expression body for a lambda that was close but didn't have the right return type. That's why I was only seeing it on complex joins and the such - I needed one statements where I had a similiar lambda that returned an int, and the same lambda with a slightly different return type. Subtle.
+
+Now to fix. Looking at the end of the if statement I saw there was a check for `InferredFromSingleType` so I suspected maybe just more filtering was needed on the cache. So I added one more check
 
 ``` csharp
 if (_returnInferenceCache.TryGetValue(cacheKey, out returnInferenceLambda) && returnInferenceLambda.InferredFromSingleType && returnInferenceLambda.Symbol.ReturnType == returnType)
@@ -222,9 +224,9 @@ if (_returnInferenceCache.TryGetValue(cacheKey, out returnInferenceLambda) && re
 
 Reran my test and...success! Happy days. 
 
-Armed with a reproducable unit test and a fix I mustered up the courage to [submit a PR](https://github.com/dotnet/roslyn/pull/14755). After receiving some feedback I was pumped to see it accepted and merged into the codebase in time for the VS 15 RC release hopefully.
+Armed with a reproducable unit test and a fix I mustered up the courage to [submit a PR](https://github.com/dotnet/roslyn/pull/14755). After receiving some feedback I was pumped to see it accepted and merged into the codebase hopefully in time for the VS 15 RC release.
 
 Postscript
 ----------
 
-I never felt like I had gotten this implementation correct. Kind of felt like things were either being put into or pulled out of cache improperly, and I was just filtering those out. But to be honest I didn't have enough confidence to go digging in and changing things here. But a few days later I noticed a new issue pop up sparked by my PR [new issue](https://github.com/dotnet/roslyn/issues/14774) around this.  Looks like as I suspected my fix is just a bandaid, and the caching is in fact the true bug. I fully expect this fix will cause my little fix to go away, but that's ok. Hopefully my test will remain to verify the behavior, and even if my tiny bit of code isn't running in the compiler I'm still pretty happy to be able to contribute to something like Roslyn.   
+To be honest, I never felt like I had gotten this implementation correct. It kind of felt like things were either being put into or pulled out of cache improperly, and I was just filtering those out. And while I felt confident my fix wouldn't introduce any issues thanks to its relatively local scope, I didn't have enough confidence to go digging in and changing things related to how things were being compared for that object. I wasn't sure what behavior was really expected. But a few days later I noticed a new issue pop up sparked by my PR [new issue](https://github.com/dotnet/roslyn/issues/14774) around this.  Looks like as I suspected my fix is just a bandaid, and the caching is in fact the true bug. I fully expect this issue's fix will cause my little addition to the compiler to go away, but that's ok. Hopefully my test will remain to verify the behavior, and even if my tiny bit of code isn't running in the compiler I'm still pretty happy to be able to contribute to something like Roslyn.   

@@ -146,12 +146,14 @@ h5 {
 
     .header h1 {
         margin:0;
+        font-size:2rem;
     }
 
     .header .icons {
         position:absolute;
-        right:1em;
-        top:2em;
+        right:1rem;
+        top:1.25rem;
+        font-size:12px;
     }
 
     .content .blog-heading h2 {
