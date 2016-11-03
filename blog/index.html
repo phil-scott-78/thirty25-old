@@ -1,0 +1,364 @@
+<!DOCTYPE html>
+<html lang="en-us">
+
+<head>
+<meta charset="utf-8">
+<meta http-equiv="X-UA-Compatible" content="chrome=1">
+<meta name="HandheldFriendly" content="True">
+<meta name="MobileOptimized" content="320">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="description" content="Quite exciting this computer magic">
+
+<base href="http://thirty25.com/">
+<title>
+
+
+     Blogs 
+
+</title>
+<link rel="canonical" href="http://thirty25.com/blog/">
+
+<link href="https://fonts.googleapis.com/css?family=Lato:400,700,900" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css?family=Raleway:900" rel="stylesheet">
+
+
+
+  <link rel="stylesheet" href="//cdnjs.cloudflare.com/ajax/libs/highlight.js/9.7.0/styles/github.min.css">
+
+
+<link rel="stylesheet" href="http://yui.yahooapis.com/pure/0.6.0/pure-min.css">
+
+
+    <link rel="stylesheet" href="http://yui.yahooapis.com/pure/0.6.0/grids-responsive-min.css">  
+
+
+
+
+<link rel="stylesheet" href="/css/main.css">
+
+
+
+
+
+
+<link rel="shortcut icon"
+
+    href="/img/leaf.ico"
+
+>
+
+
+
+  <link href="http://thirty25.com/blog/index.xml" rel="alternate" type="application/rss+xml" title="Phil Scott" />
+
+
+
+
+<script src="https://use.fontawesome.com/ea8e909c76.js"></script>
+</head>
+
+
+<body lang="en">
+
+<div id="layout" class="pure-g">
+    <div class="sidebar pure-u-1 pure-u-md-1-4">
+        <div class="header">
+            <h1 class="brand-title"><a href="http://thirty25.com/">Phil Scott</a></h1>
+            <div class="icons">
+            
+                <a href="//github.com/enkafan" target="_blank">
+                    <i class="fa fa-github fa-2x" aria-hidden="true"></i>
+                </a>
+            
+            
+            
+                <a href="//twitter.com/philco78" target="_blank">
+                    <i class="fa fa-twitter fa-2x" aria-hidden="true"></i>
+                </a>
+            
+
+            
+
+            
+
+            
+
+            
+                <a href="mailto:phil.scott@gmail.com">
+                    <i class="fa fa-envelope fa-2x" aria-hidden="true"></i>
+                </a>
+            
+
+            
+                <a href="http://thirty25.com/index.xml">
+                    <i class="fa fa-rss fa-2x" aria-hidden="true"></i>
+                </a>
+            
+            </div>
+        </div>
+        
+    </div>
+    <div class="content pure-u-1 pure-u-md-3-4">
+        <div>
+<div>
+    <h2>Blog</h2>
+    <ul>
+        
+        <div class="blog-heading">
+    <h2><a href="http://thirty25.com/post/how-i-fixed-roslyn/">How I Fixed Roslyn</a></h2> 
+    <div class="meta">
+        <div class="date" title="Mon Oct 31 2016 14:40:42 -0400">Mon Oct 31, 2016</div>
+    </div>
+</div>
+
+
+<p>With VS 15 approaching a RC I felt it was time to give it a test run on some of our production code. Visual Studio itself worked great, butI  ran into some interesting issues while executing some of our unit tests. Everything was compiling fine, but on a handful of tests I&rsquo;d get the following runtime error</p>
+
+<pre><code class="language-output">Unhandled Exception: System.ArgumentException: Expression of type 'System.Int32' cannot be used for return type 'System.Nullable`1[System.Int32]'
+   at System.Linq.Expressions.Expression.ValidateLambdaArgs(Type delegateType, Expression&amp; body, ReadOnlyCollection`1 parameters)
+   at System.Linq.Expressions.Expression.Lambda[TDelegate](Expression body, String name, Boolean tailCall, IEnumerable`1 parameters)
+   at System.Linq.Expressions.Expression.Lambda[TDelegate](Expression body, Boolean tailCall, IEnumerable`1 parameters)
+   at System.Linq.Expressions.Expression.Lambda[TDelegate](Expression body, ParameterExpression[] parameters)
+   at ....
+</code></pre>
+
+<p>At first I didn&rsquo;t know what to make of it. Frustratingly enough the majority of the code that failing was either a relatively complicated join statements in EntityFramework, or part of a complex validation rule that we set up with FluentValidation. I could easily resolve the issue by with an explicit cast or even moving the expression to an explicitly defined variable. But that would only fix the code I knew I had unit tests around, and we are far from 100% code coverage. So I wanted to get to the heart of the issue.</p>
+
+<p>Step one was trying to figure out how to reproduce it, but without code using a third party library. The FluentValidation code was tightly wound to the external library so it was right out, but the EF queries I felt were a good start. I could maybe just mimic the join that was failing using a couple of <code>List&lt;&gt;</code> and be good to go. I knew it had to do with casting a nullable int to a regular int, so I took one of the failing queries and simplified it to the point it still gave the error when running. Once I had that I replaced the <code>DbSet</code> with <code>List&lt;&gt;</code> and arrived with this:</p>
+
+<pre><code class="language-csharp">class Program
+{
+    static void Main(string[] args)
+    {
+        var invoices = new List&lt;Invoice&gt; { new Invoice { InvoiceId = 0 } };
+        var oneTimeCharges = new List&lt;OneTimeCharge&gt; { new OneTimeCharge { Invoice = 0, OneTimeChargeId = 0 } };
+        var otcCharges = invoices.Join(oneTimeCharges, inv =&gt; inv.InvoiceId, otc =&gt; otc.Invoice, (inv, otc) =&gt; inv.InvoiceId);
+        Console.WriteLine(otcCharges.Count());
+    }        
+}
+
+public class OneTimeCharge
+{
+    public int OneTimeChargeId { get; set; }
+    public int? Invoice { get; set; }
+}
+
+public class Invoice
+{
+    public int InvoiceId { get; set; }
+}
+</code></pre>
+
+<p>Threw this into a console application, hit run aaaand&hellip;.it worked. No errror. I had already reproduced the issue using FluentValidation so I knew the error could be trigged from this console app. Stumped for now I took the dog for a walk and some fresh air. While walking I started thinking that the compiler shouldn&rsquo;t care about EF, but rather maybe the collections  being of type <code>IQueryable&lt;&gt;</code> was causing  the lambdas to be compiled differently. I headed back inside and threw an <code>AsQueryable()</code> onto the end of both definitions and hit run and&hellip;.jackpot. Got the failure message, and I was never happier to see some code fail.</p>
+
+<p>Elated that I had a reproducable issue I naturally wanted to verify why it was happening. Luckily there&rsquo;s a great little tool at <a href="http://tryroslyn.azurewebsites.net/">http://tryroslyn.azurewebsites.net/</a>. This site lets you view the compiled output of a C# app in a variety of different Roslyn packages. So copied and paste my little app here, and checked out the code that was generated. I compared both the version in VS 15 (master) and the current nuget release.</p>
+
+<p>Armed with this I found the code at fault. In the current version the following code is produced:</p>
+
+<pre><code class="language-csharp">Expression&lt;Func&lt;Invoice, int?&gt;&gt; arg_EE_2 = Expression.Lambda&lt;Func&lt;Invoice, int?&gt;&gt;(Expression.Convert(Expression.Property(parameterExpression, methodof(Invoice.get_InvoiceId())), typeof(int?)), new ParameterExpression[]
+{
+    parameterExpression
+});
+</code></pre>
+
+<p>In the version in VS 15 (master) this code is produced:</p>
+
+<pre><code class="language-csharp">Expression&lt;Func&lt;Invoice, int?&gt;&gt; arg_DF_2 = Expression.Lambda&lt;Func&lt;Invoice, int?&gt;&gt;(Expression.Property(parameterExpression, methodof(Invoice.get_InvoiceId())), new ParameterExpression[]
+{
+    parameterExpression
+});
+</code></pre>
+
+<p>Note the missing <code>Expression.Convert</code>. Feeling good about myself for finding a reproducable test case I headed over to Roslyn&rsquo;s Github repository to <a href="https://github.com/dotnet/roslyn/issues/14722">file my bug</a>.</p>
+
+<p>A few days passed, and with my wife working night shifts I got the itch to see if I couldn&rsquo;t fix this myself. Heck, I got a C+ in compiler construction in college - I surely could do this.</p>
+
+<p>Step one was getting Roslyn up and running locally. This was easy enough, I just followed the instructions on the <a href="https://github.com/dotnet/roslyn/wiki/Building%20Testing%20and%20Debugging">Building Testing and Debugging
+</a> page. I walked through the instructions here to get the code building, and just to verify I did it right I ran the unit test suite. 10 minutes later&hellip;success. But oomph that was a brutal wait. My current strategy of a guess and check bug fix would be a long road to hoe if I didn&rsquo;t come up with a better plan.</p>
+
+<p>Still, I now had the code running locally. So now I could get to work. It was time to try and track down precisely when things broke. Hopefully with that information I could see what changed and figure out how to get it back to a working state. A quick look at the difference between what&rsquo;s in VS 2015 Update 3 and VS15 unfortately provide slightly overwhelming.</p>
+
+<p><img src="/img/blog/how-i-fixed-roslyn/commits.png" alt="3,700 commits" /></p>
+
+<p>But I did have a powerful thing at my disposal. My reproducable test case was an actual program. I can automate this. Git has a nice tool called <a href="https://git-scm.com/docs/git-bisect"><code>bisect</code></a> just for this. TLDR of <code>git bisect</code> if you haven&rsquo;t used it - you give it a starting and ending spot of what you consider good and bad commits plus a command to run that returns an error code of 0 or 1 depending on if it passes. It then runs a binary search through the commits executing the command and moving on. I&rsquo;d compile roslyn on each pass, then use that version of the compiler to compile my test case application, run it and check the error code returned. Thanks to the binary search of the bisect command instead of 3,700 commits I&rsquo;d only need like 12 or 13 runs. Nice!</p>
+
+<p>This did involve some trial and error. It seems the output location of <code>csc.exe</code> changed as part of the changes since Update3. No problem, nothing a little batch file <code>if</code> statement couldn&rsquo;t resolve. <code>Git bisect</code> also wasn&rsquo;t a huge fan of the project.json files being modified in the build process so I also made sure to reset things before running my app so bisect could do its thing cleanly.  My script ultimately ended up looking like this:</p>
+
+<pre><code class="language-dos">call Restore.cmd
+msbuild /v:m /m /p:Configuration=Release Roslyn.sln
+
+IF EXIST Binaries\Release\Exes\csc\csc.exe (
+Binaries\Release\Exes\csc\csc.exe expression.cs
+) ELSE (
+Binaries\Release\csc.exe expression.cs
+)
+
+git reset --hard
+expression.exe
+</code></pre>
+
+<p>Expression.cs was my source and expression.exe was the compiled app. Time to launch the bisect. To do this I ran the following commands while in the master branch, which was current failing</p>
+
+<pre><code class="language-dos">git checkout master
+git bisect start
+git bisect bad
+git bisect good update3
+git bisect run doit.cmd
+</code></pre>
+
+<p>I went to go refresh my drink and walk the dog. Ten minutes later I returned to the following message</p>
+
+<pre><code class="language-console">
+6c9e18649f576bd9df1e0db8ad21bfbce0454704 is the first bad commit
+commit 6c9e18649f576bd9df1e0db8ad21bfbce0454704
+Author: Charles Stoner &lt;chucks@microsoft.com&gt;
+Date:   Tue Jul 12 13:51:14 2016 -0700
+
+    Support async methods returning Task-like types
+
+    [Based on features/async-return with tests ported from that branch.]
+
+:040000 040000 5be0af3e25b7c68022d128a9adf5984e2eb03df3 d4ffb41d83a385fda5a1d60e04d488cf081d1a2f M      src
+bisect run success
+</code></pre>
+
+<p>Fantastic. Looks like I found the guilty commit. Hopefully I could open this up and spot whatever changed relatively quickly. Unfortunately, well, this was a huge commit.</p>
+
+<p><img src="/img/blog/how-i-fixed-roslyn/huge-commit.png" alt="Lots of changes" /></p>
+
+<p>Sigh. Lots of code to read, but it looked like quite a bit of it was unit tests. Knowing I was dealing with a lambda issue there was one thing to do at this point - <code>CTRL-F</code> and search for lambda in the <a href="https://github.com/dotnet/roslyn/commit/6c9e18649f576bd9df1e0db8ad21bfbce0454704">commit on github</a>. Eye balling the highlighted results showed a couple of hot spots with <code>lambda</code> appearing frequently so I quickly scrolled there.</p>
+
+<p><img src="/img/blog/how-i-fixed-roslyn/lambda-assert.png" alt="Is that a debug.assert" /></p>
+
+<p>That looks like somewhere to start! But I needed a better way to test than hitting the command line and compiling over and over again. I needed a unit test. I found a file named <a href="https://github.com/dotnet/roslyn/blob/master/src/Compilers/CSharp/Test/Emit/CodeGen/CodeGenExprLambdaTests.cs">CodeGenExprLambdaTests</a> and figured this was as good as place as any to write my test. Opening this up I discovered a suite of tests that were verifying compiler output and executing the results. Perfect! All I had to do was mimic their style and hopefully I would be in business. Even better I noticed Resharper picked up the tests so just maybe I could use Resharper to only run the test I was working on. In retrospect I probably should have started here, but oh well.</p>
+
+<p>Thanks to a little copy and paste development from one of the existing tests I was able they have a nice way to run the application and verify the output is correct. Very cool.</p>
+
+<pre><code class="language-csharp">[Fact]
+public void ConversionAppliedInLambdaForNonMatchingTypes()
+{
+    var program = @&quot;
+using System;
+using System.Collections.Generic;
+using System.Linq;
+namespace ConsoleApplication2
+{
+    class Program
+    {
+        static void Main(string[] args)
+        {
+            var invoices = new List&lt;Invoice&gt;().AsQueryable();
+            var oneTimeCharges = new List&lt;OneTimeCharge&gt;().AsQueryable();
+            var otcCharges = invoices.Join(oneTimeCharges, inv =&gt; inv.InvoiceId, otc =&gt; otc.Invoice, (inv, otc) =&gt; inv.InvoiceId);
+            Console.Write('k');
+        }        
+    }
+
+    public class OneTimeCharge
+    {
+        public int OneTimeChargeId { get; set; }
+        public int? Invoice { get; set; }
+    }
+    public class Invoice
+    {
+        public int InvoiceId { get; set; }
+    }    
+}
+&quot;;
+
+    CompileAndVerify(
+        sources: new string[] { program, ExpressionTestLibrary },
+        additionalRefs: new[] { ExpressionAssemblyRef },
+        expectedOutput: @&quot;k&quot;)
+        .VerifyDiagnostics();
+}
+</code></pre>
+
+<p>I ran the unit test using R# with optimism, and instead of seeing an exception about casting I actually hit the <code>Debug.Assert</code> I suspected. Nice!</p>
+
+<pre><code class="language-console">---------------------------
+Assertion Failed: Abort=Quit, Retry=Debug, Ignore=Continue
+---------------------------
+   at Microsoft.CodeAnalysis.CSharp.UnboundLambdaState.ReallyBind(NamedTypeSymbol delegateType) in C:\Projects\phil-roslyn\src\Compilers\CSharp\Portable\BoundTree\UnboundLambda.cs:line 433
+   at Microsoft.CodeAnalysis.CSharp.UnboundLambdaState.Bind(NamedTypeSymbol delegateType) in C:\Projects\phil-roslyn\src\Compilers\CSharp\Portable\BoundTree\UnboundLambda.cs:line 345
+   at Microsoft.CodeAnalysis.CSharp.UnboundLambda.Bind(NamedTypeSymbol delegateType) in C:\Projects\phil-roslyn\src\Compilers\CSharp\Portable\BoundTree\UnboundLambda.cs:line 277
+   at Microsoft.CodeAnalysis.CSharp.Binder.CreateAnonymousFunctionConversion(SyntaxNode syntax, BoundExpression source, Conversion conversion, Boolean isCast, TypeSymbol destination, DiagnosticBag diagnostics) in C:\Projects\phil-roslyn\src\Compilers\CSharp\Portable\Binder\Binder_Conversions.cs:line 300
+   at Microsoft.CodeAnalysis.CSharp.Binder.CreateConversion(SyntaxNode syntax, BoundExpression source, Conversion conversion, Boolean isCast, Boolean wasCompi......
+
+&lt;truncated&gt;
+---------------------------
+Abort   Retry   Ignore   
+---------------------------
+</code></pre>
+
+<p>That line of code matched exactly where I suspected from my quick code review. Just to confirm that my test would work in the happy path, I quickly edited my unit test to a passing version without <code>AsQueryable</code> and ran it. Success! Good news all around. Not only does the unit test runner work, but I had a great starting spot for what is going wrong.</p>
+
+<p>The line of code in question that was failing was this section of code.</p>
+
+<pre><code class="language-csharp">if (_returnInferenceCache.TryGetValue(cacheKey, out returnInferenceLambda) &amp;&amp; returnInferenceLambda.InferredFromSingleType)
+{
+    lambdaSymbol = returnInferenceLambda.Symbol;
+    Debug.Assert(lambdaSymbol.ReturnType == returnType);
+    Debug.Assert(lambdaSymbol.RefKind == refKind);
+
+    lambdaBodyBinder = returnInferenceLambda.Binder;
+    block = returnInferenceLambda.Body;
+    diagnostics.AddRange(returnInferenceLambda.Diagnostics);
+
+    goto haveLambdaBodyAndBinders;
+}
+
+</code></pre>
+
+<p>Right there is the <code>Debug.Assert</code> failing when ReturnType doesn&rsquo;t equal whatever this <code>lamdaSymbol.ReturnType</code> is. Huh. So it looks like they are caching previously generated expressions if they match, but it appears we are somehow pulling one out that doesn&rsquo;t have a matching return type. Running the test through the debugger everything else seemed to jive, just not this. This makes sense - in the release version the <code>Debug.Assert</code> wouldn&rsquo;t be there, but rather it would keep moving forward and return the expression body for a lambda that was close but didn&rsquo;t have the right return type. That&rsquo;s why I was only seeing it on complex joins and the such - I needed one statements where I had a similiar lambda that returned an int, and the same lambda with a slightly different return type. Subtle.</p>
+
+<p>Now to fix. Looking at the end of the if statement I saw there was a check for <code>InferredFromSingleType</code> so I suspected maybe just more filtering was needed on the cache. So I added one more check</p>
+
+<pre><code class="language-csharp">if (_returnInferenceCache.TryGetValue(cacheKey, out returnInferenceLambda) &amp;&amp; returnInferenceLambda.InferredFromSingleType &amp;&amp; returnInferenceLambda.Symbol.ReturnType == returnType)
+...
+</code></pre>
+
+<p>Reran my test and&hellip;success! Happy days.</p>
+
+<p>Armed with a reproducable unit test and a fix I mustered up the courage to <a href="https://github.com/dotnet/roslyn/pull/14755">submit a PR</a>. After receiving some feedback I was pumped to see it accepted and merged into the codebase hopefully in time for the VS 15 RC release.</p>
+
+<h2 id="postscript">Postscript</h2>
+
+<p>To be honest, I never felt like I had gotten this implementation correct. It kind of felt like things were either being put into or pulled out of cache improperly, and I was just filtering those out. And while I felt confident my fix wouldn&rsquo;t introduce any issues thanks to its relatively local scope, I didn&rsquo;t have enough confidence to go digging in and changing things related to how things were being compared for that object. I wasn&rsquo;t sure what behavior was really expected. But a few days later I noticed a new issue pop up sparked by my PR <a href="https://github.com/dotnet/roslyn/issues/14774">new issue</a> around this.  Looks like as I suspected my fix is just a bandaid, and the caching is in fact the true bug. I fully expect this issue&rsquo;s fix will cause my little addition to the compiler to go away, but that&rsquo;s ok. Hopefully my test will remain to verify the behavior, and even if my tiny bit of code isn&rsquo;t running in the compiler I&rsquo;m still pretty happy to be able to contribute to something like Roslyn.</p>
+
+        
+    </ul>
+</div>
+    </div>
+</div>
+
+
+
+<script>
+  (function(i,s,o,g,r,a,m){i['GoogleAnalyticsObject']=r;i[r]=i[r]||function(){
+  (i[r].q=i[r].q||[]).push(arguments)},i[r].l=1*new Date();a=s.createElement(o),
+  m=s.getElementsByTagName(o)[0];a.async=1;a.src=g;m.parentNode.insertBefore(a,m)
+  })(window,document,'script','https://www.google-analytics.com/analytics.js','ga');
+
+  ga('create', 'UA-86719954-1', 'auto');
+  ga('send', 'pageview');
+
+</script>
+
+
+
+  <script src="/js/highlight.pack.js"></script>
+
+  <script type="text/javascript">
+    hljs.registerLanguage("console", function(hljs) {
+      return {  aliases: ["output", "log"], case_insensitive: true, keywords: "", contains: [] };
+    });
+    hljs.initHighlightingOnLoad();
+  </script>
+
+
+
+</body>
+</html>
+
+

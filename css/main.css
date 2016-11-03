@@ -1,0 +1,164 @@
+* {
+    -webkit-box-sizing: border-box;
+    -moz-box-sizing: border-box;
+    box-sizing: border-box;
+}
+
+.sidebar {
+    background: #2C3E50;
+    color: #ECF0F1;
+    text-shadow: rgba(0,0,0,.5) 2px 2px 5px;
+}
+
+.sidebar h1 a {
+    color: #ECF0F1;
+    text-decoration: none;
+}
+
+.sidebar .icons a {
+    color: #2980B9;
+    text-decoration: none;
+        -webkit-transition: all .2s ease-in;
+    -moz-transition: all .2s ease-in;
+    -o-transition: all .2s ease-in;
+    -ms-transition: all .2s ease-in;
+    transition: all .2s ease-in;
+}
+
+.sidebar .icons a:hover {
+    color: #3498DB;
+}
+
+html, button, input, select, textarea,
+.pure-g [class *= "pure-u"] {
+    font-family: Lato,'Helvetica Neue',Arial,Helvetica,sans-serif;
+    font-size: 16px;
+    line-height: 1.6;
+}
+
+.content {
+    padding: 2em 1em 0;    
+    color: rgba(0,0,0,.87);
+    background-color: #fff;
+}
+
+.content .blog-heading h2 {
+    margin:0;
+    font-size:3rem;
+}
+
+.content .blog-heading a {
+    text-decoration: none;
+    color: rgba(0,0,0,.87);
+}
+
+.content .blog-heading .meta div {
+    display: inline-block;
+    margin-right:1em;
+    color: #999;
+}
+
+.content a {
+    color: #2C3E50;
+}
+
+.sidebar .icons i {
+    margin: 0 0 0 .5em;
+}
+
+p > code { 
+    background-color: #eee;
+    border:1px solid #ccc;
+    border-radius:2px;
+    font-size:.9em;
+    padding:0 .35em;
+}
+
+pre, code{
+    font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', 'Consolas', 'source-code-pro', monospace;
+}
+
+pre code {
+    font-size:.9em;
+    line-height: 1.45;
+}
+
+h1, h2, h3, h4, h5 {
+    font-family: Raleway,'Helvetica Neue',Arial,Helvetica,sans-serif;
+    line-height: 1.2857em;
+    margin: calc(2rem - .14285em) 0 1rem;
+    font-weight: 900;
+    padding: 0;
+}
+
+h1 {
+    min-height: 1rem;
+    font-size: 3rem;
+}
+
+h2 {
+    font-size: 1.714rem;
+}
+
+h3 {
+    font-size: 1.28rem;
+}
+
+h4 {
+    font-size: 1.071rem;
+}
+
+h5 {
+    font-size: 1rem;
+}
+
+
+@media (min-width: 48em) {
+    .content {
+        padding: 2em 3em 0;
+        margin-left: 25%;
+    }
+
+    .header {
+        margin: 80% 2em 0;
+        text-align: right;
+    }
+
+    .sidebar {
+        position: fixed;
+        top: 0;
+        bottom: 0;
+    }
+
+    .sidebar h1 {
+        margin: 0;
+        padding: 0;
+    }
+}
+
+@media (max-width: 48em) {
+    .pure-g [class *= "pure-u"] {
+        font-size: 14px;
+    }
+
+    .header {
+        padding: 1em;    
+    }
+
+    .header h1 {
+        margin:0;
+        font-size:2rem;
+    }
+
+    .header .icons {
+        position:absolute;
+        right:1rem;
+        top:1.25rem;
+        font-size:12px;
+    }
+
+    .content .blog-heading h2 {
+        margin:0;
+        font-size:2.5rem;
+    }
+}

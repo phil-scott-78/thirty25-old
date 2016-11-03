@@ -1,0 +1,9 @@
+section {
+    max-width: 1050px;
+}
+
+section.main .content .markdown code,
+section.main .content .markdown pre {
+    font-family: Consolas, 'Ubuntu Mono', 'Menlo', 'Courier New', Courier, monospace;
+    font-size: 0.8rem;
+}

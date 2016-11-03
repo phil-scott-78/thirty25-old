@@ -1,0 +1,237 @@
+<?xml version="1.0" encoding="utf-8" standalone="yes" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom">
+  <channel>
+    <title>Blog-rsses on Phil Scott</title>
+    <link>http://thirty25.com/blog/index.xml</link>
+    <description>Recent content in Blog-rsses on Phil Scott</description>
+    <generator>Hugo -- gohugo.io</generator>
+    <language>en-us</language>
+    <lastBuildDate>Mon, 31 Oct 2016 14:40:42 -0400</lastBuildDate>
+    <atom:link href="http://thirty25.com/blog/index.xml" rel="self" type="application/rss+xml" />
+    
+    <item>
+      <title>How I Fixed Roslyn</title>
+      <link>http://thirty25.com/post/how-i-fixed-roslyn/</link>
+      <pubDate>Mon, 31 Oct 2016 14:40:42 -0400</pubDate>
+      
+      <guid>http://thirty25.com/post/how-i-fixed-roslyn/</guid>
+      <description>
+
+&lt;p&gt;With VS 15 approaching a RC I felt it was time to give it a test run on some of our production code. Visual Studio itself worked great, butI  ran into some interesting issues while executing some of our unit tests. Everything was compiling fine, but on a handful of tests I&amp;rsquo;d get the following runtime error&lt;/p&gt;
+
+&lt;pre&gt;&lt;code class=&#34;language-output&#34;&gt;Unhandled Exception: System.ArgumentException: Expression of type &#39;System.Int32&#39; cannot be used for return type &#39;System.Nullable`1[System.Int32]&#39;
+   at System.Linq.Expressions.Expression.ValidateLambdaArgs(Type delegateType, Expression&amp;amp; body, ReadOnlyCollection`1 parameters)
+   at System.Linq.Expressions.Expression.Lambda[TDelegate](Expression body, String name, Boolean tailCall, IEnumerable`1 parameters)
+   at System.Linq.Expressions.Expression.Lambda[TDelegate](Expression body, Boolean tailCall, IEnumerable`1 parameters)
+   at System.Linq.Expressions.Expression.Lambda[TDelegate](Expression body, ParameterExpression[] parameters)
+   at ....
+&lt;/code&gt;&lt;/pre&gt;
+
+&lt;p&gt;At first I didn&amp;rsquo;t know what to make of it. Frustratingly enough the majority of the code that failing was either a relatively complicated join statements in EntityFramework, or part of a complex validation rule that we set up with FluentValidation. I could easily resolve the issue by with an explicit cast or even moving the expression to an explicitly defined variable. But that would only fix the code I knew I had unit tests around, and we are far from 100% code coverage. So I wanted to get to the heart of the issue.&lt;/p&gt;
+
+&lt;p&gt;Step one was trying to figure out how to reproduce it, but without code using a third party library. The FluentValidation code was tightly wound to the external library so it was right out, but the EF queries I felt were a good start. I could maybe just mimic the join that was failing using a couple of &lt;code&gt;List&amp;lt;&amp;gt;&lt;/code&gt; and be good to go. I knew it had to do with casting a nullable int to a regular int, so I took one of the failing queries and simplified it to the point it still gave the error when running. Once I had that I replaced the &lt;code&gt;DbSet&lt;/code&gt; with &lt;code&gt;List&amp;lt;&amp;gt;&lt;/code&gt; and arrived with this:&lt;/p&gt;
+
+&lt;pre&gt;&lt;code class=&#34;language-csharp&#34;&gt;class Program
+{
+    static void Main(string[] args)
+    {
+        var invoices = new List&amp;lt;Invoice&amp;gt; { new Invoice { InvoiceId = 0 } };
+        var oneTimeCharges = new List&amp;lt;OneTimeCharge&amp;gt; { new OneTimeCharge { Invoice = 0, OneTimeChargeId = 0 } };
+        var otcCharges = invoices.Join(oneTimeCharges, inv =&amp;gt; inv.InvoiceId, otc =&amp;gt; otc.Invoice, (inv, otc) =&amp;gt; inv.InvoiceId);
+        Console.WriteLine(otcCharges.Count());
+    }        
+}
+
+public class OneTimeCharge
+{
+    public int OneTimeChargeId { get; set; }
+    public int? Invoice { get; set; }
+}
+
+public class Invoice
+{
+    public int InvoiceId { get; set; }
+}
+&lt;/code&gt;&lt;/pre&gt;
+
+&lt;p&gt;Threw this into a console application, hit run aaaand&amp;hellip;.it worked. No errror. I had already reproduced the issue using FluentValidation so I knew the error could be trigged from this console app. Stumped for now I took the dog for a walk and some fresh air. While walking I started thinking that the compiler shouldn&amp;rsquo;t care about EF, but rather maybe the collections  being of type &lt;code&gt;IQueryable&amp;lt;&amp;gt;&lt;/code&gt; was causing  the lambdas to be compiled differently. I headed back inside and threw an &lt;code&gt;AsQueryable()&lt;/code&gt; onto the end of both definitions and hit run and&amp;hellip;.jackpot. Got the failure message, and I was never happier to see some code fail.&lt;/p&gt;
+
+&lt;p&gt;Elated that I had a reproducable issue I naturally wanted to verify why it was happening. Luckily there&amp;rsquo;s a great little tool at &lt;a href=&#34;http://tryroslyn.azurewebsites.net/&#34;&gt;http://tryroslyn.azurewebsites.net/&lt;/a&gt;. This site lets you view the compiled output of a C# app in a variety of different Roslyn packages. So copied and paste my little app here, and checked out the code that was generated. I compared both the version in VS 15 (master) and the current nuget release.&lt;/p&gt;
+
+&lt;p&gt;Armed with this I found the code at fault. In the current version the following code is produced:&lt;/p&gt;
+
+&lt;pre&gt;&lt;code class=&#34;language-csharp&#34;&gt;Expression&amp;lt;Func&amp;lt;Invoice, int?&amp;gt;&amp;gt; arg_EE_2 = Expression.Lambda&amp;lt;Func&amp;lt;Invoice, int?&amp;gt;&amp;gt;(Expression.Convert(Expression.Property(parameterExpression, methodof(Invoice.get_InvoiceId())), typeof(int?)), new ParameterExpression[]
+{
+    parameterExpression
+});
+&lt;/code&gt;&lt;/pre&gt;
+
+&lt;p&gt;In the version in VS 15 (master) this code is produced:&lt;/p&gt;
+
+&lt;pre&gt;&lt;code class=&#34;language-csharp&#34;&gt;Expression&amp;lt;Func&amp;lt;Invoice, int?&amp;gt;&amp;gt; arg_DF_2 = Expression.Lambda&amp;lt;Func&amp;lt;Invoice, int?&amp;gt;&amp;gt;(Expression.Property(parameterExpression, methodof(Invoice.get_InvoiceId())), new ParameterExpression[]
+{
+    parameterExpression
+});
+&lt;/code&gt;&lt;/pre&gt;
+
+&lt;p&gt;Note the missing &lt;code&gt;Expression.Convert&lt;/code&gt;. Feeling good about myself for finding a reproducable test case I headed over to Roslyn&amp;rsquo;s Github repository to &lt;a href=&#34;https://github.com/dotnet/roslyn/issues/14722&#34;&gt;file my bug&lt;/a&gt;.&lt;/p&gt;
+
+&lt;p&gt;A few days passed, and with my wife working night shifts I got the itch to see if I couldn&amp;rsquo;t fix this myself. Heck, I got a C+ in compiler construction in college - I surely could do this.&lt;/p&gt;
+
+&lt;p&gt;Step one was getting Roslyn up and running locally. This was easy enough, I just followed the instructions on the &lt;a href=&#34;https://github.com/dotnet/roslyn/wiki/Building%20Testing%20and%20Debugging&#34;&gt;Building Testing and Debugging
+&lt;/a&gt; page. I walked through the instructions here to get the code building, and just to verify I did it right I ran the unit test suite. 10 minutes later&amp;hellip;success. But oomph that was a brutal wait. My current strategy of a guess and check bug fix would be a long road to hoe if I didn&amp;rsquo;t come up with a better plan.&lt;/p&gt;
+
+&lt;p&gt;Still, I now had the code running locally. So now I could get to work. It was time to try and track down precisely when things broke. Hopefully with that information I could see what changed and figure out how to get it back to a working state. A quick look at the difference between what&amp;rsquo;s in VS 2015 Update 3 and VS15 unfortately provide slightly overwhelming.&lt;/p&gt;
+
+&lt;p&gt;&lt;img src=&#34;http://thirty25.com/img/blog/how-i-fixed-roslyn/commits.png&#34; alt=&#34;3,700 commits&#34; /&gt;&lt;/p&gt;
+
+&lt;p&gt;But I did have a powerful thing at my disposal. My reproducable test case was an actual program. I can automate this. Git has a nice tool called &lt;a href=&#34;https://git-scm.com/docs/git-bisect&#34;&gt;&lt;code&gt;bisect&lt;/code&gt;&lt;/a&gt; just for this. TLDR of &lt;code&gt;git bisect&lt;/code&gt; if you haven&amp;rsquo;t used it - you give it a starting and ending spot of what you consider good and bad commits plus a command to run that returns an error code of 0 or 1 depending on if it passes. It then runs a binary search through the commits executing the command and moving on. I&amp;rsquo;d compile roslyn on each pass, then use that version of the compiler to compile my test case application, run it and check the error code returned. Thanks to the binary search of the bisect command instead of 3,700 commits I&amp;rsquo;d only need like 12 or 13 runs. Nice!&lt;/p&gt;
+
+&lt;p&gt;This did involve some trial and error. It seems the output location of &lt;code&gt;csc.exe&lt;/code&gt; changed as part of the changes since Update3. No problem, nothing a little batch file &lt;code&gt;if&lt;/code&gt; statement couldn&amp;rsquo;t resolve. &lt;code&gt;Git bisect&lt;/code&gt; also wasn&amp;rsquo;t a huge fan of the project.json files being modified in the build process so I also made sure to reset things before running my app so bisect could do its thing cleanly.  My script ultimately ended up looking like this:&lt;/p&gt;
+
+&lt;pre&gt;&lt;code class=&#34;language-dos&#34;&gt;call Restore.cmd
+msbuild /v:m /m /p:Configuration=Release Roslyn.sln
+
+IF EXIST Binaries\Release\Exes\csc\csc.exe (
+Binaries\Release\Exes\csc\csc.exe expression.cs
+) ELSE (
+Binaries\Release\csc.exe expression.cs
+)
+
+git reset --hard
+expression.exe
+&lt;/code&gt;&lt;/pre&gt;
+
+&lt;p&gt;Expression.cs was my source and expression.exe was the compiled app. Time to launch the bisect. To do this I ran the following commands while in the master branch, which was current failing&lt;/p&gt;
+
+&lt;pre&gt;&lt;code class=&#34;language-dos&#34;&gt;git checkout master
+git bisect start
+git bisect bad
+git bisect good update3
+git bisect run doit.cmd
+&lt;/code&gt;&lt;/pre&gt;
+
+&lt;p&gt;I went to go refresh my drink and walk the dog. Ten minutes later I returned to the following message&lt;/p&gt;
+
+&lt;pre&gt;&lt;code class=&#34;language-console&#34;&gt;
+6c9e18649f576bd9df1e0db8ad21bfbce0454704 is the first bad commit
+commit 6c9e18649f576bd9df1e0db8ad21bfbce0454704
+Author: Charles Stoner &amp;lt;chucks@microsoft.com&amp;gt;
+Date:   Tue Jul 12 13:51:14 2016 -0700
+
+    Support async methods returning Task-like types
+
+    [Based on features/async-return with tests ported from that branch.]
+
+:040000 040000 5be0af3e25b7c68022d128a9adf5984e2eb03df3 d4ffb41d83a385fda5a1d60e04d488cf081d1a2f M      src
+bisect run success
+&lt;/code&gt;&lt;/pre&gt;
+
+&lt;p&gt;Fantastic. Looks like I found the guilty commit. Hopefully I could open this up and spot whatever changed relatively quickly. Unfortunately, well, this was a huge commit.&lt;/p&gt;
+
+&lt;p&gt;&lt;img src=&#34;http://thirty25.com/img/blog/how-i-fixed-roslyn/huge-commit.png&#34; alt=&#34;Lots of changes&#34; /&gt;&lt;/p&gt;
+
+&lt;p&gt;Sigh. Lots of code to read, but it looked like quite a bit of it was unit tests. Knowing I was dealing with a lambda issue there was one thing to do at this point - &lt;code&gt;CTRL-F&lt;/code&gt; and search for lambda in the &lt;a href=&#34;https://github.com/dotnet/roslyn/commit/6c9e18649f576bd9df1e0db8ad21bfbce0454704&#34;&gt;commit on github&lt;/a&gt;. Eye balling the highlighted results showed a couple of hot spots with &lt;code&gt;lambda&lt;/code&gt; appearing frequently so I quickly scrolled there.&lt;/p&gt;
+
+&lt;p&gt;&lt;img src=&#34;http://thirty25.com/img/blog/how-i-fixed-roslyn/lambda-assert.png&#34; alt=&#34;Is that a debug.assert&#34; /&gt;&lt;/p&gt;
+
+&lt;p&gt;That looks like somewhere to start! But I needed a better way to test than hitting the command line and compiling over and over again. I needed a unit test. I found a file named &lt;a href=&#34;https://github.com/dotnet/roslyn/blob/master/src/Compilers/CSharp/Test/Emit/CodeGen/CodeGenExprLambdaTests.cs&#34;&gt;CodeGenExprLambdaTests&lt;/a&gt; and figured this was as good as place as any to write my test. Opening this up I discovered a suite of tests that were verifying compiler output and executing the results. Perfect! All I had to do was mimic their style and hopefully I would be in business. Even better I noticed Resharper picked up the tests so just maybe I could use Resharper to only run the test I was working on. In retrospect I probably should have started here, but oh well.&lt;/p&gt;
+
+&lt;p&gt;Thanks to a little copy and paste development from one of the existing tests I was able they have a nice way to run the application and verify the output is correct. Very cool.&lt;/p&gt;
+
+&lt;pre&gt;&lt;code class=&#34;language-csharp&#34;&gt;[Fact]
+public void ConversionAppliedInLambdaForNonMatchingTypes()
+{
+    var program = @&amp;quot;
+using System;
+using System.Collections.Generic;
+using System.Linq;
+namespace ConsoleApplication2
+{
+    class Program
+    {
+        static void Main(string[] args)
+        {
+            var invoices = new List&amp;lt;Invoice&amp;gt;().AsQueryable();
+            var oneTimeCharges = new List&amp;lt;OneTimeCharge&amp;gt;().AsQueryable();
+            var otcCharges = invoices.Join(oneTimeCharges, inv =&amp;gt; inv.InvoiceId, otc =&amp;gt; otc.Invoice, (inv, otc) =&amp;gt; inv.InvoiceId);
+            Console.Write(&#39;k&#39;);
+        }        
+    }
+
+    public class OneTimeCharge
+    {
+        public int OneTimeChargeId { get; set; }
+        public int? Invoice { get; set; }
+    }
+    public class Invoice
+    {
+        public int InvoiceId { get; set; }
+    }    
+}
+&amp;quot;;
+
+    CompileAndVerify(
+        sources: new string[] { program, ExpressionTestLibrary },
+        additionalRefs: new[] { ExpressionAssemblyRef },
+        expectedOutput: @&amp;quot;k&amp;quot;)
+        .VerifyDiagnostics();
+}
+&lt;/code&gt;&lt;/pre&gt;
+
+&lt;p&gt;I ran the unit test using R# with optimism, and instead of seeing an exception about casting I actually hit the &lt;code&gt;Debug.Assert&lt;/code&gt; I suspected. Nice!&lt;/p&gt;
+
+&lt;pre&gt;&lt;code class=&#34;language-console&#34;&gt;---------------------------
+Assertion Failed: Abort=Quit, Retry=Debug, Ignore=Continue
+---------------------------
+   at Microsoft.CodeAnalysis.CSharp.UnboundLambdaState.ReallyBind(NamedTypeSymbol delegateType) in C:\Projects\phil-roslyn\src\Compilers\CSharp\Portable\BoundTree\UnboundLambda.cs:line 433
+   at Microsoft.CodeAnalysis.CSharp.UnboundLambdaState.Bind(NamedTypeSymbol delegateType) in C:\Projects\phil-roslyn\src\Compilers\CSharp\Portable\BoundTree\UnboundLambda.cs:line 345
+   at Microsoft.CodeAnalysis.CSharp.UnboundLambda.Bind(NamedTypeSymbol delegateType) in C:\Projects\phil-roslyn\src\Compilers\CSharp\Portable\BoundTree\UnboundLambda.cs:line 277
+   at Microsoft.CodeAnalysis.CSharp.Binder.CreateAnonymousFunctionConversion(SyntaxNode syntax, BoundExpression source, Conversion conversion, Boolean isCast, TypeSymbol destination, DiagnosticBag diagnostics) in C:\Projects\phil-roslyn\src\Compilers\CSharp\Portable\Binder\Binder_Conversions.cs:line 300
+   at Microsoft.CodeAnalysis.CSharp.Binder.CreateConversion(SyntaxNode syntax, BoundExpression source, Conversion conversion, Boolean isCast, Boolean wasCompi......
+
+&amp;lt;truncated&amp;gt;
+---------------------------
+Abort   Retry   Ignore   
+---------------------------
+&lt;/code&gt;&lt;/pre&gt;
+
+&lt;p&gt;That line of code matched exactly where I suspected from my quick code review. Just to confirm that my test would work in the happy path, I quickly edited my unit test to a passing version without &lt;code&gt;AsQueryable&lt;/code&gt; and ran it. Success! Good news all around. Not only does the unit test runner work, but I had a great starting spot for what is going wrong.&lt;/p&gt;
+
+&lt;p&gt;The line of code in question that was failing was this section of code.&lt;/p&gt;
+
+&lt;pre&gt;&lt;code class=&#34;language-csharp&#34;&gt;if (_returnInferenceCache.TryGetValue(cacheKey, out returnInferenceLambda) &amp;amp;&amp;amp; returnInferenceLambda.InferredFromSingleType)
+{
+    lambdaSymbol = returnInferenceLambda.Symbol;
+    Debug.Assert(lambdaSymbol.ReturnType == returnType);
+    Debug.Assert(lambdaSymbol.RefKind == refKind);
+
+    lambdaBodyBinder = returnInferenceLambda.Binder;
+    block = returnInferenceLambda.Body;
+    diagnostics.AddRange(returnInferenceLambda.Diagnostics);
+
+    goto haveLambdaBodyAndBinders;
+}
+
+&lt;/code&gt;&lt;/pre&gt;
+
+&lt;p&gt;Right there is the &lt;code&gt;Debug.Assert&lt;/code&gt; failing when ReturnType doesn&amp;rsquo;t equal whatever this &lt;code&gt;lamdaSymbol.ReturnType&lt;/code&gt; is. Huh. So it looks like they are caching previously generated expressions if they match, but it appears we are somehow pulling one out that doesn&amp;rsquo;t have a matching return type. Running the test through the debugger everything else seemed to jive, just not this. This makes sense - in the release version the &lt;code&gt;Debug.Assert&lt;/code&gt; wouldn&amp;rsquo;t be there, but rather it would keep moving forward and return the expression body for a lambda that was close but didn&amp;rsquo;t have the right return type. That&amp;rsquo;s why I was only seeing it on complex joins and the such - I needed one statements where I had a similiar lambda that returned an int, and the same lambda with a slightly different return type. Subtle.&lt;/p&gt;
+
+&lt;p&gt;Now to fix. Looking at the end of the if statement I saw there was a check for &lt;code&gt;InferredFromSingleType&lt;/code&gt; so I suspected maybe just more filtering was needed on the cache. So I added one more check&lt;/p&gt;
+
+&lt;pre&gt;&lt;code class=&#34;language-csharp&#34;&gt;if (_returnInferenceCache.TryGetValue(cacheKey, out returnInferenceLambda) &amp;amp;&amp;amp; returnInferenceLambda.InferredFromSingleType &amp;amp;&amp;amp; returnInferenceLambda.Symbol.ReturnType == returnType)
+...
+&lt;/code&gt;&lt;/pre&gt;
+
+&lt;p&gt;Reran my test and&amp;hellip;success! Happy days.&lt;/p&gt;
+
+&lt;p&gt;Armed with a reproducable unit test and a fix I mustered up the courage to &lt;a href=&#34;https://github.com/dotnet/roslyn/pull/14755&#34;&gt;submit a PR&lt;/a&gt;. After receiving some feedback I was pumped to see it accepted and merged into the codebase hopefully in time for the VS 15 RC release.&lt;/p&gt;
+
+&lt;h2 id=&#34;postscript&#34;&gt;Postscript&lt;/h2&gt;
+
+&lt;p&gt;To be honest, I never felt like I had gotten this implementation correct. It kind of felt like things were either being put into or pulled out of cache improperly, and I was just filtering those out. And while I felt confident my fix wouldn&amp;rsquo;t introduce any issues thanks to its relatively local scope, I didn&amp;rsquo;t have enough confidence to go digging in and changing things related to how things were being compared for that object. I wasn&amp;rsquo;t sure what behavior was really expected. But a few days later I noticed a new issue pop up sparked by my PR &lt;a href=&#34;https://github.com/dotnet/roslyn/issues/14774&#34;&gt;new issue&lt;/a&gt; around this.  Looks like as I suspected my fix is just a bandaid, and the caching is in fact the true bug. I fully expect this issue&amp;rsquo;s fix will cause my little addition to the compiler to go away, but that&amp;rsquo;s ok. Hopefully my test will remain to verify the behavior, and even if my tiny bit of code isn&amp;rsquo;t running in the compiler I&amp;rsquo;m still pretty happy to be able to contribute to something like Roslyn.&lt;/p&gt;
+</description>
+    </item>
+    
+  </channel>
+</rss>
