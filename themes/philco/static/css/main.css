@@ -39,6 +39,7 @@ html, button, input, select, textarea,
 .content {
     padding: 2em 1em 0;    
     color: rgba(0,0,0,.87);
+    background-color: #fff;
 }
 
 .content .blog-heading h2 {
